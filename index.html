@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>大鱼吃小鱼</title>
+<title>大鱼吃小鱼 · 音效版</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   body {
@@ -23,19 +23,23 @@
   .stats {
     display:flex; justify-content:space-between; align-items:center;
     width:100%; margin-top:18px; color:#b6e2f0; font-weight:600;
+    gap:10px; flex-wrap:wrap;
   }
-  .score { background:#11212e; padding:8px 24px; border-radius:40px;
-    border:1px solid #3b687f; font-size:1.5rem; }
-  .score span { color:#ffd966; font-size:2rem; font-weight:800; }
-  .size { background:#0e2a36; padding:6px 20px; border-radius:40px;
-    border:1px solid #47a3c9; font-size:1.1rem; }
-  .size span { color:#6ed4ff; font-weight:800; font-size:1.6rem; }
+  .score { background:#11212e; padding:8px 20px; border-radius:40px;
+    border:1px solid #3b687f; font-size:1.3rem; }
+  .score span { color:#ffd966; font-size:1.8rem; font-weight:800; }
+  .size { background:#0e2a36; padding:6px 18px; border-radius:40px;
+    border:1px solid #47a3c9; font-size:1rem; }
+  .size span { color:#6ed4ff; font-weight:800; font-size:1.4rem; }
   button {
     background:#1c465a; border:none; color:#ddf4ff; font-weight:700;
-    font-size:1.1rem; padding:10px 30px; border-radius:50px;
-    cursor:pointer; box-shadow:0 8px 0 #0e1e28; border:1px solid #4092b0;
+    font-size:1rem; padding:10px 22px; border-radius:50px;
+    cursor:pointer; box-shadow:0 6px 0 #0e1e28; border:1px solid #4092b0;
   }
-  button:active { transform:translateY(5px); box-shadow:0 3px 0 #0e1e28; }
+  button:active { transform:translateY(4px); box-shadow:0 2px 0 #0e1e28; }
+  .mute-btn {
+    background:#2a3a4a; padding:10px 16px; font-size:1.2rem;
+  }
 </style>
 </head>
 <body>
@@ -44,6 +48,7 @@
   <div class="stats">
     <div class="score">🐟 <span id="score">0</span></div>
     <div class="size">⚡ 尺寸 <span id="size">1.0</span></div>
+    <button class="mute-btn" id="muteBtn">🔊</button>
     <button id="restart">🔄 重来</button>
   </div>
 </div>
@@ -54,18 +59,111 @@
   const ctx = cv.getContext('2d');
   const scoreEl = document.getElementById('score');
   const sizeEl = document.getElementById('size');
+  const muteBtn = document.getElementById('muteBtn');
   const W = 800, H = 600;
 
-  let player, fishes, mouseX, mouseY, score, over;
-  const MAX_FISH = 50;
+  // ========== 音频系统 (Web Audio API) ==========
+  let audioCtx = null;
+  let muted = false;
+  let bgmInterval = null;
+
+  function initAudio(){
+    if(!audioCtx){
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+  }
+
+  // 通用音效播放函数
+  function playTone(freq, duration, type, volume){
+    if(muted || !audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type || 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(volume || 0.15, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + duration);
+  }
+
+  // 吃鱼音效（清脆的上升音）
+  function playEatSound(playerSize){
+    if(muted || !audioCtx) return;
+    const baseFreq = 500 + Math.min(playerSize * 8, 400);
+    playTone(baseFreq, 0.08, 'square', 0.12);
+    setTimeout(() => playTone(baseFreq * 1.5, 0.08, 'square', 0.1), 50);
+  }
+
+  // 游戏结束音效（低沉的下降音）
+  function playGameOverSound(){
+    if(muted || !audioCtx) return;
+    playTone(300, 0.3, 'sawtooth', 0.15);
+    setTimeout(() => playTone(200, 0.4, 'sawtooth', 0.15), 150);
+    setTimeout(() => playTone(100, 0.6, 'sawtooth', 0.15), 350);
+  }
+
+  // 背景音乐（轻松愉快的循环旋律）
+  let bgmIndex = 0;
+  const bgmNotes = [
+    262, 330, 392, 330,   // C4 E4 G4 E4
+    294, 349, 440, 349,   // D4 F4 A4 F4
+    330, 392, 494, 392,   // E4 G4 B4 G4
+    262, 330, 392, 523,   // C4 E4 G4 C5
+  ];
+  function playBGMNote(){
+    if(muted || !audioCtx) return;
+    const freq = bgmNotes[bgmIndex % bgmNotes.length];
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.04, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.4);
+    bgmIndex++;
+  }
+  function startBGM(){
+    if(bgmInterval) return;
+    bgmInterval = setInterval(playBGMNote, 500);
+  }
+  function stopBGM(){
+    if(bgmInterval){ clearInterval(bgmInterval); bgmInterval = null; }
+  }
+
+  // ========== 游戏逻辑 ==========
+  let player, fishes, mouseX, mouseY, score, over, particles;
+  const MAX_FISH = 55;
+
+  // 更多鱼种：不同的颜色 + 形状风格
+  const FISH_TYPES = [
+    { color:'#FF6B6B', shape:'oval' },      // 红色椭圆
+    { color:'#4ECDC4', shape:'oval' },      // 青色椭圆
+    { color:'#FFD166', shape:'slim' },      // 黄色细长
+    { color:'#9B5DE5', shape:'round' },     // 紫色圆
+    { color:'#F15BB5', shape:'oval' },      // 粉色椭圆
+    { color:'#00BBF9', shape:'slim' },      // 蓝色细长
+    { color:'#FEE440', shape:'round' },     // 亮黄圆
+    { color:'#FB8B24', shape:'oval' },      // 橙色椭圆
+    { color:'#41EAD4', shape:'slim' },      // 青绿细长
+    { color:'#118AB2', shape:'round' },     // 深蓝圆
+    { color:'#EF476F', shape:'oval' },      // 玫红椭圆
+    { color:'#06D6A0', shape:'slim' },      // 翠绿细长
+  ];
 
   function reset(){
     over = false; score = 0;
     player = { x:W/2, y:H/2, r:18, baseR:18, grow:0 };
     mouseX = player.x; mouseY = player.y;
     fishes = [];
+    particles = [];
     for(let i=0;i<20;i++) spawn(true);
     updateUI();
+    if(audioCtx) startBGM();
   }
 
   function spawn(force){
@@ -91,13 +189,13 @@
         y = 80 + Math.random()*(H-160);
       }
     }
-    const colors = ['#FF6B6B','#4ECDC4','#FFD166','#9B5DE5','#F15BB5',
-                    '#00BBF9','#FEE440','#FB8B24','#41EAD4','#118AB2'];
+    const type = FISH_TYPES[Math.floor(Math.random()*FISH_TYPES.length)];
     const a = Math.random()*Math.PI*2;
     const sp = 0.4 + Math.random()*1.0;
     fishes.push({
       x, y, r,
-      color: colors[Math.floor(Math.random()*colors.length)],
+      color: type.color,
+      shape: type.shape,
       vx: Math.cos(a)*sp, vy: Math.sin(a)*sp,
       wig: Math.random()*100
     });
@@ -117,6 +215,23 @@
     player.y = Math.max(player.r, Math.min(H-player.r, player.y));
   }
 
+  // 生成粒子效果（吃鱼时的爆裂）
+  function createParticles(x, y, color){
+    for(let i=0;i<8;i++){
+      const angle = Math.random()*Math.PI*2;
+      const speed = 1 + Math.random()*3;
+      particles.push({
+        x, y,
+        vx: Math.cos(angle)*speed,
+        vy: Math.sin(angle)*speed,
+        life: 30,
+        maxLife: 30,
+        color: color,
+        size: 2 + Math.random()*3
+      });
+    }
+  }
+
   function updateFishes(){
     for(let i=fishes.length-1;i>=0;i--){
       const f = fishes[i];
@@ -132,6 +247,9 @@
       const d = Math.sqrt(dx*dx+dy*dy);
       if(d < player.r + f.r - 2){
         if(player.r > f.r + 1.5){
+          // 吃鱼
+          createParticles(f.x, f.y, f.color);
+          playEatSound(player.r);
           player.grow += f.r*0.28;
           player.r = Math.min(80, player.baseR + player.grow);
           score++;
@@ -139,30 +257,79 @@
           if(fishes.length < MAX_FISH) spawn(true);
           updateUI();
         } else if(f.r > player.r + 1.5){
+          // 被吃
           over = true;
+          stopBGM();
+          playGameOverSound();
         }
       }
     }
   }
 
-  function drawFish(x,y,r,color,angle){
+  function updateParticles(){
+    for(let i=particles.length-1;i>=0;i--){
+      const p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vx *= 0.95;
+      p.vy *= 0.95;
+      p.life--;
+      if(p.life <= 0) particles.splice(i,1);
+    }
+  }
+
+  // 绘制不同形状的鱼
+  function drawFishShape(shape, r){
+    if(shape === 'slim'){
+      // 细长鱼
+      ctx.beginPath();
+      ctx.ellipse(0, 0, r*1.2, r*0.6, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-r*1.0, 0);
+      ctx.lineTo(-r*1.7, -r*0.6);
+      ctx.lineTo(-r*1.7, r*0.6);
+      ctx.closePath();
+      ctx.fill();
+    } else if(shape === 'round'){
+      // 圆胖鱼
+      ctx.beginPath();
+      ctx.arc(0, 0, r*0.95, 0, Math.PI*2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-r*0.8, 0);
+      ctx.lineTo(-r*1.4, -r*0.55);
+      ctx.lineTo(-r*1.4, r*0.55);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      // 标准椭圆
+      ctx.beginPath();
+      ctx.ellipse(0, 0, r, r*0.75, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-r*0.9, 0);
+      ctx.lineTo(-r*1.5, -r*0.5);
+      ctx.lineTo(-r*1.5, r*0.5);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  function drawFish(x, y, r, color, angle, shape){
     ctx.save();
-    ctx.translate(x,y);
+    ctx.translate(x, y);
     ctx.rotate(angle);
-    ctx.beginPath();
-    ctx.ellipse(0,0,r,r*0.75,0,0,Math.PI*2);
     ctx.fillStyle = color;
-    ctx.fill();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 8;
+    drawFishShape(shape || 'oval', r);
+    ctx.shadowBlur = 0;
     ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 1.5;
     ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(-r*0.9, 0);
-    ctx.lineTo(-r*1.5, -r*0.5);
-    ctx.lineTo(-r*1.5, r*0.5);
-    ctx.closePath();
-    ctx.fillStyle = color;
-    ctx.fill();
+
+    // 眼睛
     ctx.beginPath();
     ctx.arc(r*0.4, -r*0.2, r*0.18, 0, Math.PI*2);
     ctx.fillStyle = '#fff';
@@ -171,12 +338,14 @@
     ctx.arc(r*0.45, -r*0.2, r*0.08, 0, Math.PI*2);
     ctx.fillStyle = '#000';
     ctx.fill();
+
     ctx.restore();
   }
 
   function draw(){
     ctx.clearRect(0,0,W,H);
 
+    // 背景气泡
     ctx.fillStyle = 'rgba(100,180,220,0.05)';
     for(let i=0;i<15;i++){
       const bx = (i*137)%W, by = (Date.now()*0.02 + i*80)%H;
@@ -185,24 +354,63 @@
       ctx.fill();
     }
 
+    // 鱼群
     fishes.forEach(f=>{
       const a = Math.atan2(f.vy, f.vx);
-      drawFish(f.x, f.y, f.r, f.color, a);
+      drawFish(f.x, f.y, f.r, f.color, a, f.shape);
     });
 
+    // 玩家（金色大鱼）
     const dir = Math.atan2(mouseY-player.y, mouseX-player.x);
-    drawFish(player.x, player.y, player.r, '#ffd966', dir);
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    ctx.rotate(dir);
+    ctx.fillStyle = '#ffd966';
+    ctx.shadowColor = '#ffd966';
+    ctx.shadowBlur = 15;
+    drawFishShape('oval', player.r);
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // 眼睛
+    ctx.beginPath();
+    ctx.arc(player.r*0.4, -player.r*0.2, player.r*0.18, 0, Math.PI*2);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(player.r*0.45, -player.r*0.2, player.r*0.08, 0, Math.PI*2);
+    ctx.fillStyle = '#000';
+    ctx.fill();
+    ctx.restore();
 
+    // 粒子效果
+    particles.forEach(p=>{
+      ctx.globalAlpha = p.life / p.maxLife;
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+      ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+
+    // 游戏结束画面
     if(over){
-      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillStyle = 'rgba(0,0,0,0.75)';
       ctx.fillRect(0,0,W,H);
       ctx.fillStyle = '#ff6b6b';
       ctx.font = 'bold 60px sans-serif';
       ctx.textAlign = 'center';
+      ctx.shadowColor = '#ff0000';
+      ctx.shadowBlur = 20;
       ctx.fillText('游戏结束', W/2, H/2);
+      ctx.shadowBlur = 0;
       ctx.fillStyle = '#fff';
       ctx.font = '28px sans-serif';
-      ctx.fillText('点击"重来"重新开始', W/2, H/2+60);
+      ctx.fillText('最终分数: ' + score, W/2, H/2 + 60);
+      ctx.font = '22px sans-serif';
+      ctx.fillStyle = '#b6e2f0';
+      ctx.fillText('点击"重来"重新开始', W/2, H/2 + 110);
     }
   }
 
@@ -211,6 +419,7 @@
       updatePlayer();
       updateFishes();
     }
+    updateParticles();
     draw();
     requestAnimationFrame(loop);
   }
@@ -221,9 +430,34 @@
     mouseY = (e.clientY - rect.top) * (H / rect.height);
   });
 
+  // 触摸支持（手机）
+  cv.addEventListener('touchmove', e=>{
+    e.preventDefault();
+    const rect = cv.getBoundingClientRect();
+    const touch = e.touches[0];
+    mouseX = (touch.clientX - rect.left) * (W / rect.width);
+    mouseY = (touch.clientY - rect.top) * (H / rect.height);
+  }, { passive: false });
+
   document.getElementById('restart').addEventListener('click', ()=>{
+    initAudio();
+    if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     reset();
   });
+
+  muteBtn.addEventListener('click', ()=>{
+    muted = !muted;
+    muteBtn.textContent = muted ? '🔇' : '🔊';
+    if(muted) stopBGM();
+    else if(!over) startBGM();
+  });
+
+  // 首次用户交互时初始化音频（浏览器要求）
+  cv.addEventListener('click', ()=>{
+    initAudio();
+    if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    if(!over) startBGM();
+  }, { once: true });
 
   reset();
   loop();
